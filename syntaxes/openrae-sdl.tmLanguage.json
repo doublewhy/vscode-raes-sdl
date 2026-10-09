@@ -1,0 +1,47 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "OpenRAE SDL",
+  "scopeName": "source.openrae-sdl",
+  "comment": "SDL source is YAML (sdl-yaml/v1). This grammar delegates all YAML tokenization to VS Code's built-in source.yaml grammar and injects two SDL-specific token kinds: top-level SDL keys and ${variable} placeholders. Top-level key names mirror the properties of contracts/schemas/sdl/sdl-authoring-input-v1.json; test/grammar.test.mjs fails if they drift from the bundled schema.",
+  "patterns": [
+    {
+      "include": "source.yaml"
+    }
+  ],
+  "injections": {
+    "L:source.openrae-sdl meta.map.key.yaml -meta.flow": {
+      "patterns": [
+        {
+          "include": "#section-key"
+        },
+        {
+          "include": "#metadata-key"
+        }
+      ]
+    },
+    "L:source.openrae-sdl -comment": {
+      "patterns": [
+        {
+          "include": "#placeholder"
+        }
+      ]
+    }
+  },
+  "repository": {
+    "section-key": {
+      "comment": "Authoring section at column 0 of a block mapping key.",
+      "match": "^(?:outcome_interpretation_rules|time_progression_policies|behavior_specifications|observation_boundaries|evidence_requirements|temporal_constraints|time_domain_mappings|generated_artifacts|augmentation_scope|deployment_tenants|persistent_volumes|forwarding_agents|action_contracts|deployment_cells|execution_policy|identity_domains|identity_facades|identity_forests|variation_points|infrastructure|relationships|propositions|time_domains|realization|assertions|conditions|objectives|variables|workflows|accounts|entities|features|content|injects|scripts|stories|agents|clocks|events|nodes)(?=[ \\t]*:(?:[ \\t]|$))",
+      "name": "support.type.section.openrae-sdl"
+    },
+    "metadata-key": {
+      "comment": "Document metadata and composition keys at column 0.",
+      "match": "^(?:semantic_revision|description|imports|version|module|name)(?=[ \\t]*:(?:[ \\t]|$))",
+      "name": "support.type.metadata.openrae-sdl"
+    },
+    "placeholder": {
+      "comment": "Variable reference such as ${replicas}; names follow the variables section key pattern.",
+      "match": "\\$\\{[a-z0-9][a-z0-9_-]{0,63}\\}",
+      "name": "variable.other.placeholder.openrae-sdl"
+    }
+  }
+}

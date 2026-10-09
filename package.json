@@ -1,0 +1,88 @@
+{
+  "name": "vscode-raes-sdl",
+  "displayName": "OpenRAE SDL (prototype)",
+  "description": "Prototype editor support for OpenRAE SDL: file association, TextMate highlighting, schema association and a language-server bridge to the raes language-service helpers.",
+  "version": "0.0.1",
+  "publisher": "doublewhy",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/doublewhy/vscode-raes-sdl.git"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.sdl.yaml"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode the language-server bridge starts only the Python interpreter named in user settings; a workspace value of openraeSdl.python is ignored.",
+      "restrictedConfigurations": [
+        "openraeSdl.python"
+      ]
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "openrae-sdl",
+        "aliases": [
+          "OpenRAE SDL",
+          "openrae-sdl"
+        ],
+        "extensions": [
+          ".sdl.yaml"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "openrae-sdl",
+        "scopeName": "source.openrae-sdl",
+        "path": "./syntaxes/openrae-sdl.tmLanguage.json"
+      }
+    ],
+    "yamlValidation": [
+      {
+        "fileMatch": "*.sdl.yaml",
+        "url": "./schemas/sdl-authoring-input-v1.json"
+      }
+    ],
+    "configuration": {
+      "title": "OpenRAE SDL",
+      "properties": {
+        "openraeSdl.languageServer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the prototype language-server bridge to raes.language_service for *.sdl.yaml files."
+        },
+        "openraeSdl.python": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python interpreter in which the raes package is importable. The raes version installed there decides SDL semantics."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "npm run test:grammar && npm run test:python",
+    "test:grammar": "node --test test/grammar.test.mjs",
+    "test:python": "python3 -m unittest discover -s test -p 'test_*.py' -v"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2"
+  }
+}
