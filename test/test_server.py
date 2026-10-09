@@ -17,9 +17,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lsp_client import LspClient  # noqa: E402
+from raising_helpers import MARKER as RAISE_MARKER  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "server" / "raes_sdl_lsp.py"
+RAISING_LAUNCHER = ROOT / "test" / "raising_helpers.py"
 PYTHON = os.environ.get("RAES_PYTHON", sys.executable)
 NO_RANGE_NOTE = "(raes reported no source location)"
 STALE_NOTE = "(from the last parsable version)"
@@ -70,18 +72,24 @@ def _raes_available() -> bool:
     return probe.returncode == 0
 
 
-def _start(env: dict[str, str] | None = None) -> tuple[LspClient, dict]:
-    client = LspClient([PYTHON, str(SERVER)], env=env)
+def _start(env: dict[str, str] | None = None, script: Path = SERVER) -> tuple[LspClient, dict]:
+    client = LspClient([PYTHON, str(script)], env=env)
     result = client.request("initialize", {"processId": None, "rootUri": None, "capabilities": {}}, timeout=60)
     client.notify("initialized", {})
     return client, result
 
 
-@unittest.skipUnless(_raes_available(), f"raes is not importable from {PYTHON}")
-class BridgeTest(unittest.TestCase):
+class _Session:
+    """One server process per test class, driven through the helpers below."""
+
+    script = SERVER
+    client: LspClient
+    init: dict
+    counter: int
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.client, cls.init = _start()
+        cls.client, cls.init = _start(script=cls.script)
         cls.counter = 0
 
     @classmethod
@@ -120,6 +128,9 @@ class BridgeTest(unittest.TestCase):
         )
         return result["items"]
 
+
+@unittest.skipUnless(_raes_available(), f"raes is not importable from {PYTHON}")
+class BridgeTest(_Session, unittest.TestCase):
     def test_initialize_reports_raes_version_and_omits_formatting(self) -> None:
         self.assertIn("; raes ", self.init["serverInfo"]["version"])
         self.assertNotIn("unavailable", self.init["serverInfo"]["version"])
@@ -217,10 +228,42 @@ class BridgeTest(unittest.TestCase):
             locations, [{"uri": uri, "range": {"start": {"line": 2, "character": 2}, "end": {"line": 2, "character": 5}}}]
         )
 
+    def test_malformed_notification_is_logged_and_serving_continues(self) -> None:
+        self.client.notify("textDocument/didOpen", {"textDocument": {"uri": "file:///workspace/no-text.sdl.yaml"}})
+        message = self.client.wait_for(
+            lambda m: m["method"] == "window/logMessage" and "textDocument/didOpen failed" in m["params"]["message"]
+        )
+        self.assertEqual(message["params"]["type"], 1)
+        _, diagnostics = self.open(BLOCK_NODE)
+        self.assertEqual(diagnostics, [])
+
     def test_imports_are_rejected_without_file_context(self) -> None:
         _, diagnostics = self.open("name: composed\nimports:\n  - path: module.yaml\n    namespace: shared\n")
         self.assertEqual(len(diagnostics), 1)
         self.assertIn("SDL imports require file-backed parsing", diagnostics[0]["message"])
+
+
+@unittest.skipUnless(_raes_available(), f"raes is not importable from {PYTHON}")
+class HelperExceptionTest(_Session, unittest.TestCase):
+    """The real bridge, with helpers that raise on a marker line (see raising_helpers.py)."""
+
+    script = RAISING_LAUNCHER
+
+    def test_helper_exception_becomes_one_diagnostic(self) -> None:
+        _, diagnostics = self.open(f"{BLOCK_NODE}{RAISE_MARKER}\n")
+        self.assertEqual([item["code"] for item in diagnostics], ["bridge.helper_exception"])
+        self.assertIn("RuntimeError: simulated helper failure", diagnostics[0]["message"])
+        _, after = self.open(BLOCK_NODE)
+        self.assertEqual(after, [])
+
+    def test_completion_falls_back_when_the_helper_raises(self) -> None:
+        uri, _ = self.open(BLOCK_NODE)
+        failing = f"{BLOCK_NODE}{RAISE_MARKER}\n"
+        self.assertEqual(self.change(uri, failing, 2)[0]["code"], "bridge.helper_exception")
+        line = failing.split("\n").index("    features: [app]")
+        items = self.complete(uri, line, len("    features: ["))
+        self.assertEqual([item["label"] for item in items], ["app"])
+        self.assertTrue(items[0]["detail"].endswith(STALE_NOTE))
 
 
 class MissingRaesTest(unittest.TestCase):

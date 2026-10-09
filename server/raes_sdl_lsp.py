@@ -10,6 +10,10 @@ field-name items are dropped when the cursor is in a value position (after ``key
 flow sequence), because the helper returns a section's field list at any depth below it.
 Reference candidates are never filtered, so helper mismatches such as issue 1339 stay visible.
 
+A helper can raise instead of returning a diagnostic, so every call is guarded: a failed
+diagnostics run is published as one diagnostic, and a failed completion falls back like an
+unparsable document.
+
 The server passes the open document's text to the in-process rae helpers. It does not launch
 scenarios, read other files, or use the network. It depends only on the Python standard
 library and on the ``raes`` distribution installed in the interpreter that runs it, so the
@@ -32,6 +36,7 @@ BRIDGE_VERSION = "0.0.1"
 DEBOUNCE_SECONDS = 0.4
 NO_RANGE_NOTE = " (raes reported no source location)"
 STALE_NOTE = " (from the last parsable version)"
+HELPER_EXCEPTION_CODE = "bridge.helper_exception"
 SEVERITY = {"error": 1, "warning": 2, "information": 3, "info": 3, "hint": 4}
 COMPLETION_KIND = {"field": 5, "reference": 18}
 
@@ -74,6 +79,15 @@ def lsp_range(item_range: dict[str, Any] | None) -> dict[str, Any]:
         origin = {"line": 0, "character": 0}
         return {"start": origin, "end": origin}
     return {"start": lsp_position(item_range["start"]), "end": lsp_position(item_range["end"])}
+
+
+def helper_exception(exc: BaseException) -> dict[str, Any]:
+    """A rae-shaped diagnostic for a helper call that raised instead of returning a result."""
+    return {
+        "severity": "error",
+        "code": HELPER_EXCEPTION_CODE,
+        "message": f"raes.language_service raised {type(exc).__name__}: {exc}",
+    }
 
 
 def to_lsp_diagnostic(item: dict[str, Any], uri: str) -> dict[str, Any]:
@@ -131,6 +145,9 @@ class Server:
     def notify(self, method: str, params: Any) -> None:
         self.send({"jsonrpc": "2.0", "method": method, "params": params})
 
+    def log_error(self, text: str) -> None:
+        self.notify("window/logMessage", {"type": 1, "message": text})
+
     def serve(self) -> int:
         while True:
             message = read_message(self.reader)
@@ -145,7 +162,10 @@ class Server:
         handler = self.REQUESTS.get(method) if "id" in message else self.NOTIFICATIONS.get(method)
         if "id" not in message:
             if handler is not None:
-                handler(self, message.get("params") or {})
+                try:
+                    handler(self, message.get("params") or {})
+                except Exception as exc:  # a notification has no reply; log it and keep serving
+                    self.log_error(f"{method} failed: {exc!r}")
             return
         if handler is None:
             self.send({"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32601, "message": f"{method}"}})
@@ -202,7 +222,7 @@ class Server:
         document.snapshot = (params["contentChanges"][-1]["text"], params["textDocument"].get("version"))
         if document.timer is not None:
             document.timer.cancel()
-        document.timer = threading.Timer(self.debounce, self.publish, args=(uri,))
+        document.timer = threading.Timer(self.debounce, self.publish_logged, args=(uri,))
         document.timer.daemon = True
         document.timer.start()
 
@@ -216,15 +236,25 @@ class Server:
             document.timer.cancel()
         self.notify("textDocument/publishDiagnostics", {"uri": uri, "diagnostics": []})
 
+    def publish_logged(self, uri: str) -> None:
+        """Debounce-thread entry point: an exception there would end only that thread silently."""
+        try:
+            self.publish(uri)
+        except Exception as exc:
+            self.log_error(f"publishing diagnostics for {uri} failed: {exc!r}")
+
     def publish(self, uri: str) -> None:
         document = self.documents.get(uri)
         if document is None or language_service is None:
             return
         text, version = document.snapshot
         with self.helper_lock:
-            result = language_service.language_diagnostics(text)
-            if language_service.language_completions(text, cursor_path="").get("status") == "ok":
-                document.last_completable = text
+            try:
+                result = language_service.language_diagnostics(text)
+                if language_service.language_completions(text, cursor_path="").get("status") == "ok":
+                    document.last_completable = text
+            except Exception as exc:
+                result = {"diagnostics": [helper_exception(exc)]}
         if self.documents.get(uri) is not document or document.snapshot[1] != version:
             return  # a newer edit arrived; its own timer will publish
         diagnostics = [to_lsp_diagnostic(item, uri) for item in result.get("diagnostics", [])]
@@ -243,11 +273,11 @@ class Server:
             return empty
         stale = False
         with self.helper_lock:
-            result = language_service.language_completions(text, cursor_path=context.path)
+            result = self.completions_or_failure(text, context.path)
             if result.get("status") == "ok":
                 document.last_completable = text
             elif document.last_completable is not None:
-                result = language_service.language_completions(document.last_completable, cursor_path=context.path)
+                result = self.completions_or_failure(document.last_completable, context.path)
                 stale = True
         if result.get("status") != "ok":
             return empty
@@ -262,6 +292,13 @@ class Server:
             if not (context.value_position and item.get("kind") == "field")
         ]
         return {"isIncomplete": False, "items": items}
+
+    def completions_or_failure(self, text: str, path: str) -> dict[str, Any]:
+        try:
+            return language_service.language_completions(text, cursor_path=path)
+        except Exception as exc:
+            self.log_error(f"language_completions raised {exc!r}")
+            return {"status": "exception"}
 
     def definition(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         uri = params["textDocument"]["uri"]

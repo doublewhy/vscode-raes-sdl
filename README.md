@@ -88,7 +88,10 @@ measurements.
 - A document with `imports` is reported as invalid, because the helpers have no file path to
   resolve modules against. There is no workspace index, so go to definition stays in one file.
 - Every request parses the whole document. On the largest repository example (46 KB) a request
-  took roughly 280 to 350 ms. The helpers refuse input over 64 KiB.
+  took roughly 280 to 350 ms on a busy machine. The helpers refuse input over 64 KiB.
+- Each helper turns the parser's and validator's own errors into results, and any other exception
+  reaches the caller. The bridge reports a helper that raises as one `bridge.helper_exception`
+  diagnostic and keeps running.
 - Formatting is not offered, because `language_format` drops comments and rewrites shorthand.
 - Positions are converted as code points, while LSP counts UTF-16 code units. They differ only on a
   line that contains a character outside the Basic Multilingual Plane before the position.
@@ -122,7 +125,7 @@ is not importable from it. The grammar test downloads VS Code's YAML grammars on
 SHA-256 digests and caches them in `.cache/`. Set `VSCODE_YAML_SYNTAXES` to a directory that
 already holds them to run it offline.
 
-On 2026-10-09, all 6 grammar tests and all 22 Python tests passed with `raes` 6.0.1 from PyPI and
+On 2026-10-09, all 6 grammar tests and all 25 Python tests passed with `raes` 6.0.1 from PyPI and
 with an OpenRAE/rae checkout at commit `35122105b0c1bb648754625d8e3920eafa9bc599`. The GitHub
 Actions workflow in `.github/workflows/test.yml` repeats this with `raes` 6.0.1 and builds the
 package.
