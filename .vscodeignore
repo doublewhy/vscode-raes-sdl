@@ -1,0 +1,6 @@
+.cache/**
+.github/**
+evidence/**
+test/**
+**/__pycache__/**
+.gitignore
